@@ -1,105 +1,131 @@
 
 import streamlit as st
 import pulp
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 
-# --- Vehicle Data ---
-vehicles = {
-    "Small van": {"cost": 80, "max_weight": 350, "max_area": 1.8},
-    "Short wheel base": {"cost": 95, "max_weight": 800, "max_area": 2.4},
-    "Medium wheel base": {"cost": 50, "max_weight": 1400, "max_area": 3.6},
-    "4 meter sprinter": {"cost": 85, "max_weight": 1250, "max_area": 5.25},
-    "luton van": {"cost": 110, "max_weight": 1000, "max_area": 8},
-    "7.5 tonne": {"cost": 100, "max_weight": 2800, "max_area": 13.8},
-    "18 tonne": {"cost": 130, "max_weight": 9000, "max_area": 17.52},
-    "26 tonne": {"cost": 140, "max_weight": 15000, "max_area": 19.2},
-    "arctic": {"cost": 200, "max_weight": 24000, "max_area": 33.75},
-    "Small van2": {"cost": 80, "max_weight": 350, "max_area": 1.8},
-    "Short wheel base2": {"cost": 95, "max_weight": 800, "max_area": 2.4},
-    "Medium wheel base2": {"cost": 50, "max_weight": 1400, "max_area": 3.6},
-    "4 meter sprinter2": {"cost": 85, "max_weight": 1250, "max_area": 5.25},
-    "luton van2": {"cost": 110, "max_weight": 1000, "max_area": 8},
-    "7.5 tonne2": {"cost": 100, "max_weight": 2800, "max_area": 13.8},
-    "18 tonne2": {"cost": 130, "max_weight": 9000, "max_area": 17.52},
-    "26 tonne2": {"cost": 140, "max_weight": 15000, "max_area": 19.2},
-    "arctic2": {"cost": 200, "max_weight": 24000, "max_area": 33.75},
-    "Small van3": {"cost": 80, "max_weight": 350, "max_area": 1.8},
-    "Short wheel base3": {"cost": 95, "max_weight": 800, "max_area": 2.4},
-    "Medium wheel base3": {"cost": 50, "max_weight": 1400, "max_area": 3.6},
-    "4 meter sprinter3": {"cost": 85, "max_weight": 1250, "max_area": 5.25},
-    "luton van3": {"cost": 110, "max_weight": 1000, "max_area": 8},
-    "7.5 tonne3": {"cost": 100, "max_weight": 2800, "max_area": 13.8},
-    "18 tonne3": {"cost": 130, "max_weight": 9000, "max_area": 17.52},
-    "26 tonne3": {"cost": 140, "max_weight": 15000, "max_area": 19.2},
-    "arctic3": {"cost": 200, "max_weight": 24000, "max_area": 33.75},
-    "Small van4": {"cost": 80, "max_weight": 350, "max_area": 1.8},
-    "Short wheel base4": {"cost": 95, "max_weight": 800, "max_area": 2.4},
-    "Medium wheel base4": {"cost": 50, "max_weight": 1400, "max_area": 3.6},
-    "4 meter sprinter4": {"cost": 85, "max_weight": 1250, "max_area": 5.25},
-    "luton van4": {"cost": 110, "max_weight": 1000, "max_area": 8},
-    "7.5 tonne4": {"cost": 100, "max_weight": 2800, "max_area": 13.8},
-    "18 tonne4": {"cost": 130, "max_weight": 9000, "max_area": 17.52},
-    "26 tonne4": {"cost": 140, "max_weight": 15000, "max_area": 19.2},
-    "arctic4": {"cost": 200, "max_weight": 24000, "max_area": 33.75},
-    "Small van5": {"cost": 80, "max_weight": 350, "max_area": 1.8},
-    "Short wheel base5": {"cost": 95, "max_weight": 800, "max_area": 2.4},
-    "Medium wheel base5": {"cost": 50, "max_weight": 1400, "max_area": 3.6},
-    "4 meter sprinter5": {"cost": 85, "max_weight": 1250, "max_area": 5.25},
-    "luton van5": {"cost": 110, "max_weight": 1000, "max_area": 8},
-    "7.5 tonne5": {"cost": 100, "max_weight": 2800, "max_area": 13.8},
-    "18 tonne5": {"cost": 130, "max_weight": 9000, "max_area": 17.52},
-    "26 tonne5": {"cost": 140, "max_weight": 15000, "max_area": 19.2},
-    "arctic5": {"cost": 200, "max_weight": 24000, "max_area": 33.75},
+# Page config
+st.set_page_config(page_title="Truck Optimizer", layout="wide")
+
+# Vehicle specs (45 total)
+base_vehicles = {
+    "Small van": [1.5, 1.2, 1.0, 350, 80],
+    "Short wheel base": [2.0, 1.2, 1.3, 800, 95],
+    "Medium wheel base": [3.0, 1.2, 1.9, 1400, 50],
+    "4 meter sprinter": [4.2, 1.25, 1.9, 1250, 85],
+    "luton van": [4.0, 2.0, 2.0, 1000, 110],
+    "7.5 tonne": [6.0, 2.3, 2.3, 2800, 100],
+    "18 tonne": [7.3, 2.4, 2.4, 9000, 130],
+    "26 tonne": [8.0, 2.4, 2.5, 15000, 140],
+    "arctic": [13.5, 2.5, 2.7, 24000, 200],
 }
 
+vehicles = {}
+for i in range(1, 6):
+    for name, (length, width, height, max_weight, cost) in base_vehicles.items():
+        key = f"{name}{i}" if i > 1 else name
+        vehicles[key] = {
+            "length": length,
+            "width": width,
+            "height": height,
+            "max_weight": max_weight,
+            "cost": cost
+        }
 
-st.title("🚛 Truck Optimization Tool")
-st.markdown("Select the cheapest combination of trucks to carry parcels based on weight and size using linear programming.")
+# UI
+st.title("🚛 Truck Optimizer")
+num_parcels = st.number_input("Number of Parcels", 1, 20, 2)
 
-num_parcels = st.number_input("Number of Parcels", min_value=1, max_value=20, step=1)
+weights, lengths, widths, heights = [], [], [], []
 
-weights = []
-areas = []
-
-st.subheader("Enter Parcel Details")
+cols = st.columns(5)
 for i in range(num_parcels):
-    col1, col2 = st.columns(2)
-    with col1:
-        weight = st.number_input(f"Parcel {i+1} Weight (kg)", key=f"w_{i}", min_value=0.0, value=500.0)
-    with col2:
-        area = st.number_input(f"Parcel {i+1} Area (m²)", key=f"a_{i}", min_value=0.0, value=20.0)
-    weights.append(weight)
-    areas.append(area)
+    with cols[0]:
+        weights.append(st.number_input(f"Parcel {i+1} Weight (kg)", 0.1, 10000.0, 100.0, key=f"weight_{i}"))
+    with cols[1]:
+        lengths.append(st.number_input(f"Parcel {i+1} Length (m)", 0.1, 20.0, 1.0, key=f"length_{i}"))
+    with cols[2]:
+        widths.append(st.number_input(f"Parcel {i+1} Width (m)", 0.1, 10.0, 1.0, key=f"width_{i}"))
+    with cols[3]:
+        heights.append(st.number_input(f"Parcel {i+1} Height (m)", 0.1, 10.0, 1.0, key=f"height_{i}"))
+
+areas = [lengths[i] * widths[i] for i in range(num_parcels)]
 
 if st.button("Run Optimization"):
-    try:
-        model = pulp.LpProblem("Minimize_Truck_Usage_Cost", pulp.LpMinimize)
-        x = pulp.LpVariable.dicts("Assign", ((i, j) for i in range(num_parcels) for j in vehicles), cat="Binary")
-        y = pulp.LpVariable.dicts("UseVehicle", (j for j in vehicles), cat="Binary")
+    model = pulp.LpProblem("TruckOptimization", pulp.LpMinimize)
+    x = pulp.LpVariable.dicts("x", ((i, j) for i in range(num_parcels) for j in vehicles), cat="Binary")
+    y = pulp.LpVariable.dicts("y", (j for j in vehicles), cat="Binary")
 
-        model += pulp.lpSum(vehicles[j]["cost"] * y[j] for j in vehicles), "TotalCost"
+    # Objective
+    model += pulp.lpSum(vehicles[j]["cost"] * y[j] for j in vehicles)
 
-        for i in range(num_parcels):
-            model += pulp.lpSum(x[i, j] for j in vehicles) == 1
+    # Constraints
+    for i in range(num_parcels):
+        model += pulp.lpSum(x[i, j] for j in vehicles) == 1
 
-        for j in vehicles:
-            model += pulp.lpSum(weights[i] * x[i, j] for i in range(num_parcels)) <= vehicles[j]["max_weight"] * y[j]
-            model += pulp.lpSum(areas[i] * x[i, j] for i in range(num_parcels)) <= vehicles[j]["max_area"] * y[j]
+    for j in vehicles:
+        model += pulp.lpSum(weights[i] * x[i, j] for i in range(num_parcels)) <= vehicles[j]["max_weight"] * y[j]
+        model += pulp.lpSum(areas[i] * x[i, j] for i in range(num_parcels)) <= vehicles[j]["length"] * vehicles[j]["width"] * y[j]
 
-        solver = pulp.PULP_CBC_CMD(msg=False)
-        model.solve(solver)
+        # Enforce sum of parcel dimensions fit inside vehicle dimensions
+        model += pulp.lpSum(lengths[i] * x[i, j] for i in range(num_parcels)) <= vehicles[j]["length"] * y[j]
+        model += pulp.lpSum(widths[i] * x[i, j] for i in range(num_parcels)) <= vehicles[j]["width"] * y[j]
+        model += pulp.lpSum(heights[i] * x[i, j] for i in range(num_parcels)) <= vehicles[j]["height"] * y[j]
 
-        st.success(f"Optimization Status: {pulp.LpStatus[model.status]}")
-        st.write(f"**Total Cost:** {pulp.value(model.objective)}")
+    model.solve()
 
-        for j in vehicles:
-            if pulp.value(y[j]) == 1:
-                st.markdown(f"### ✅ Vehicle {j} Used")
-                st.write(f"- Cost: {vehicles[j]['cost']}")
-                st.write(f"- Max Weight: {vehicles[j]['max_weight']}")
-                st.write(f"- Max Area: {vehicles[j]['max_area']}")
-                for i in range(num_parcels):
-                    if pulp.value(x[i, j]) == 1:
-                        st.write(f"  - Parcel {i+1} ➜ Weight: {weights[i]}, Area: {areas[i]}")
+    st.subheader("Optimization Results")
+    st.write(f"**Status:** {pulp.LpStatus[model.status]}")
+    st.write(f"**Total Cost:** £{pulp.value(model.objective):.2f}")
 
-    except Exception as e:
-        st.error(f"Error: {e}")
+    results = []
+    vehicle_parcels = {}
+
+    for j in vehicles:
+        if pulp.value(y[j]) == 1:
+            vehicle_parcels[j] = []
+            for i in range(num_parcels):
+                if pulp.value(x[i, j]) == 1:
+                    results.append({
+                        "Vehicle": j,
+                        "Parcel #": i + 1,
+                        "Weight (kg)": weights[i],
+                        "Length (m)": lengths[i],
+                        "Width (m)": widths[i],
+                        "Height (m)": heights[i],
+                    })
+                    vehicle_parcels[j].append(i)
+
+    if results:
+        df = pd.DataFrame(results)
+        st.dataframe(df[["Parcel #", "Vehicle", "Weight (kg)", "Length (m)", "Width (m)", "Height (m)"]])
+
+        # Draw diagrams
+        st.subheader("📐 Parcel Layouts Inside Vehicles")
+
+        for vehicle_name, parcel_indices in vehicle_parcels.items():
+            fig, ax = plt.subplots(figsize=(6, 3))
+            v = vehicles[vehicle_name]
+            ax.set_title(vehicle_name)
+            ax.set_xlim(0, v["length"])
+            ax.set_ylim(0, v["width"])
+            ax.set_xlabel("Length (m)")
+            ax.set_ylabel("Width (m)")
+
+            # Simple placement: place parcels side by side along length
+            x_cursor = 0
+            for idx in parcel_indices:
+                l, w = lengths[idx], widths[idx]
+                if x_cursor + l <= v["length"]:
+                    rect = patches.Rectangle((x_cursor, 0), l, w, edgecolor='black', facecolor='skyblue')
+                    ax.add_patch(rect)
+                    ax.text(x_cursor + l/2, w/2, f"P{idx+1}", ha='center', va='center')
+                    x_cursor += l
+                else:
+                    st.warning(f"Parcel {idx+1} exceeds truck length in {vehicle_name}. Skipping.")
+
+            ax.set_aspect('equal')
+            st.pyplot(fig)
+    else:
+        st.warning("❌ No feasible assignment found.")
