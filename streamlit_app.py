@@ -4,17 +4,21 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
-# --- Page Config ---
-st.set_page_config(page_title="Truck Optimizer", layout="wide")
-st.markdown("""
-    <style>
-    .main {
-        background-color: #48cae4;
-    }
-    </style>
-""", unsafe_allow_html=True)
+BIG_M = 10000
+EPSILON = 0.001
 
-# --- Vehicle Data ---
+st.set_page_config(page_title="Truck Optimiser", layout="wide")
+st.markdown(
+    """
+    <div style="background-color: #00008B; padding: 20px 10px; border-radius: 8px; text-align: center; border: 1px solid #ddd;">
+        <h1 style="color: #FFFFFF; margin-bottom: 5px;">🚚 Truck Optimiser</h1>
+        <p style="color: #FFFFFF; font-size: 18px;">Optimise parcel placement in trucks for cost-effective and efficient booking</p>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+# Vehicle data
 vehicle_data = [
     ("Small van", 1.5, 1.2, 1, 350, 1.8, 80),
     ("Short wheel base", 2, 1.2, 1.3, 800, 2.4, 95),
@@ -27,9 +31,8 @@ vehicle_data = [
     ("arctic", 13.5, 2.5, 2.7, 24000, 33.75, 200),
 ]
 
-# Create vehicle variations
 vehicles = {}
-for i in range(1, 50):
+for i in range(1, 11):
     for name, l, w, h, wt, ar, cost in vehicle_data:
         vehicles[f"{name}{i if i > 1 else ''}"] = {
             "max_length": l,
@@ -40,145 +43,192 @@ for i in range(1, 50):
             "cost": cost
         }
 
-st.title("🚚 Truck Optimizer")
-st.write("Enter parcel dimensions and weight to find the cheapest truck configuration.")
-
-# --- Bulk Parcel Entry ---
-st.subheader("Bulk Parcel Entry")
-bulk_weights, bulk_lengths, bulk_widths, bulk_heights = [], [], [], []
-num_groups = st.number_input("Number of Bulk Parcel Groups", min_value=0, max_value=10, value=0)
-
-for g in range(num_groups):
-    st.markdown(f"**Group {g+1}**")
-    count = st.number_input(f"Number of Parcels in Group {g+1}", min_value=1, max_value=200, value=10, key=f"count_{g}")
-    weight = st.number_input(f"Weight per Parcel (kg) - Group {g+1}", value=100.0, key=f"bw_{g}")
-    length = st.number_input(f"Length per Parcel (m) - Group {g+1}", value=1.0, key=f"bl_{g}")
-    width = st.number_input(f"Width per Parcel (m) - Group {g+1}", value=1.0, key=f"bwth_{g}")
-    height = st.number_input(f"Height per Parcel (m) - Group {g+1}", value=1.0, key=f"bh_{g}")
-
-    bulk_weights.extend([weight] * count)
-    bulk_lengths.extend([length] * count)
-    bulk_widths.extend([width] * count)
-    bulk_heights.extend([height] * count)
-
-# Calculate bulk areas from dimensions
-bulk_areas = [l * w for l, w in zip(bulk_lengths, bulk_widths)]
-
-# --- Manual Parcel Entry ---
-st.subheader("Manual Parcel Entry")
-num_parcels = st.number_input("Number of Individual Parcels", min_value=0, max_value=50, value=2)
-manual_weights, manual_lengths, manual_widths, manual_heights = [], [], [], []
-
+# Input form
+st.header("Parcel Inputs")
+num_individual = st.number_input("Number of Individual Parcels", min_value=0, max_value=200, value=0)
+weights, lengths, widths, heights = [], [], [], []
 cols = st.columns(5)
-for i in range(num_parcels):
+for i in range(num_individual):
     with cols[0]:
-        manual_weights.append(st.number_input(f"Parcel {i+1} Weight (kg)", value=100.0, key=f"w_{i}"))
+        weights.append(st.number_input(f"Weight {i+1}", key=f"wt_{i}", value=100.0))
     with cols[1]:
-        manual_lengths.append(st.number_input(f"Parcel {i+1} Length (m)", value=1.0, key=f"l_{i}"))
+        lengths.append(st.number_input(f"Length {i+1}", key=f"len_{i}", value=1.0))
     with cols[2]:
-        manual_widths.append(st.number_input(f"Parcel {i+1} Width (m)", value=1.0, key=f"wd_{i}"))
+        widths.append(st.number_input(f"Width {i+1}", key=f"wid_{i}", value=1.0))
     with cols[3]:
-        manual_heights.append(st.number_input(f"Parcel {i+1} Height (m)", value=1.0, key=f"h_{i}"))
+        heights.append(st.number_input(f"Height {i+1}", key=f"hei_{i}", value=1.0))
+    with cols[4]:
+        st.markdown("&nbsp;")
 
-# Calculate manual areas from dimensions
-manual_areas = [l * w for l, w in zip(manual_lengths, manual_widths)]
+st.markdown("---")
+st.subheader("Bulk Parcel Entries")
+bulk_entries = st.number_input("Number of Bulk Parcel Types", min_value=0, max_value=10, value=0)
+bulk_data = []
 
-# Combine all parcels
-weights = bulk_weights + manual_weights
-lengths = bulk_lengths + manual_lengths
-widths = bulk_widths + manual_widths
-heights = bulk_heights + manual_heights
-areas = bulk_areas + manual_areas
-num_total_parcels = len(weights)
+for i in range(bulk_entries):
+    st.markdown(f"**Bulk Parcel Type {i+1}**")
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1:
+        quantity = st.number_input(f"Quantity", min_value=1, value=1, key=f"qty_{i}")
+    with c2:
+        weight = st.number_input("Weight", value=100.0, key=f"b_wt_{i}")
+    with c3:
+        length = st.number_input("Length", value=1.0, key=f"b_len_{i}")
+    with c4:
+        width = st.number_input("Width", value=1.0, key=f"b_wid_{i}")
+    with c5:
+        height = st.number_input("Height", value=1.0, key=f"b_hei_{i}")
 
-# --- Run Optimization ---
-if st.button("Run Optimization"):
+    for _ in range(quantity):
+        weights.append(weight)
+        lengths.append(length)
+        widths.append(width)
+        heights.append(height)
+
+areas = [lengths[i] * widths[i] for i in range(len(weights))]
+
+# Optimizer function
+def run_optimizer(parcel_indices):
     model = pulp.LpProblem("Truck Optimization", pulp.LpMinimize)
-
-    x = pulp.LpVariable.dicts("Assign", ((i, j) for i in range(num_total_parcels) for j in vehicles), cat="Binary")
+    x = pulp.LpVariable.dicts("Assign", ((i, j) for i in parcel_indices for j in vehicles), cat="Binary")
     y = pulp.LpVariable.dicts("UseVehicle", (j for j in vehicles), cat="Binary")
 
     model += pulp.lpSum(vehicles[j]["cost"] * y[j] for j in vehicles)
 
-    for i in range(num_total_parcels):
+    for i in parcel_indices:
         model += pulp.lpSum(x[i, j] for j in vehicles) == 1
 
     for j in vehicles:
-        model += pulp.lpSum(weights[i] * x[i, j] for i in range(num_total_parcels)) <= vehicles[j]["max_weight"] * y[j]
-        model += pulp.lpSum(areas[i] * x[i, j] for i in range(num_total_parcels)) <= vehicles[j]["max_area"] * y[j]
-
-        for i in range(num_total_parcels):
-            model += lengths[i] * x[i, j] <= vehicles[j]["max_length"] * y[j]
-            model += widths[i] * x[i, j] <= vehicles[j]["max_width"] * y[j]
-            model += heights[i] * x[i, j] <= vehicles[j]["max_height"] * y[j]
+        model += pulp.lpSum(weights[i] * x[i, j] for i in parcel_indices) <= vehicles[j]["max_weight"] * y[j]
+        model += pulp.lpSum(areas[i] * x[i, j] for i in parcel_indices) <= vehicles[j]["max_area"] + BIG_M * (1 - y[j])
 
     model.solve(pulp.PULP_CBC_CMD(msg=False))
 
-    st.subheader("Optimization Results")
-    st.write(f"**Status:** {pulp.LpStatus[model.status]}")
-    st.write(f"**Total Cost:** £{pulp.value(model.objective):.2f}")
+    assignment, used_vehicles = {}, set()
+    for i in parcel_indices:
+        for j in vehicles:
+            if pulp.value(x[i, j]) == 1:
+                assignment[i] = j
+                used_vehicles.add(j)
+                break
 
-    results = []
-    for j in vehicles:
-        if pulp.value(y[j]) == 1:
-            for i in range(num_total_parcels):
-                if pulp.value(x[i, j]) == 1:
-                    results.append({
-                        "Vehicle": j,
-                        "Parcel #": i + 1,
-                        "Weight (kg)": weights[i],
-                        "Area (m²)": areas[i],
-                        "Length (m)": lengths[i],
-                        "Width (m)": widths[i],
-                        "Height (m)": heights[i],
-                        "Cost (£)": vehicles[j]["cost"]
-                    })
+    total_cost = pulp.value(model.objective)
+    return assignment, used_vehicles, total_cost
 
-    if results:
-        df = pd.DataFrame(results)
-        st.dataframe(df)
-        csv = df.to_csv(index=False)
-        st.download_button("Download Results", csv, "truck_assignment.csv", "text/csv")
+# Layout fitting function
+def fit_layout(assignment):
+    failed = []
+    layout = {v: [] for v in set(assignment.values())}
 
-        # --- Visualization ---
-        st.subheader("📦 Parcel Placement in Selected Trucks (Top-Down View)")
-        used_vehicles = set(df["Vehicle"])
-        for v in used_vehicles:
-            vehicle_info = vehicles[v]
-            fig, ax = plt.subplots(figsize=(6, 3))
-            ax.set_title(f"Vehicle: {v} ({vehicle_info['max_length']}m × {vehicle_info['max_width']}m)")
-            ax.set_xlim(0, vehicle_info['max_length'])
-            ax.set_ylim(0, vehicle_info['max_width'])
-            ax.set_aspect('equal')
-            ax.add_patch(patches.Rectangle((0, 0), vehicle_info['max_length'], vehicle_info['max_width'], edgecolor='black', facecolor='lightgrey'))
+    for v in layout:
+        truck = vehicles[v]
+        parcels = [i for i, a in assignment.items() if a == v]
+        x_cursor, y_cursor, row_height = 0, 0, 0
 
-            x_offset = 0
-            y_offset = 0
-            max_row_height = 0.0
+        for i in parcels:
+            L, W = lengths[i], widths[i]
+            placed = False
+            for rotate in [(L, W), (W, L)]:
+                l, w = rotate
+                if x_cursor + l <= truck["max_length"] and y_cursor + w <= truck["max_width"]:
+                    layout[v].append((i, x_cursor, y_cursor, l, w))
+                    x_cursor += l
+                    row_height = max(row_height, w)
+                    placed = True
+                    break
+            if not placed:
+                x_cursor = 0
+                y_cursor += row_height
+                row_height = 0
+                if y_cursor + W <= truck["max_width"]:
+                    layout[v].append((i, x_cursor, y_cursor, L, W))
+                    x_cursor += L
+                    row_height = W
+                else:
+                    failed.append(i)
+    return layout, failed
 
-            parcels = df[df["Vehicle"] == v]
-            for _, row in parcels.iterrows():
-                pl = row["Length (m)"]
-                pw = row["Width (m)"]
-                pid = row["Parcel #"]
+# Visualization function
+def visualize_layout(layout_data):
+    fig, axes = plt.subplots(len(layout_data), 1, figsize=(10, 5 * len(layout_data)))
+    if len(layout_data) == 1:
+        axes = [axes]
 
-                if x_offset + pl > vehicle_info['max_length']:
-                    x_offset = 0
-                    y_offset += max_row_height
-                    max_row_height = 0
+    for ax, (vehicle, parcels) in zip(axes, layout_data.items()):
+        truck = vehicles[vehicle]
+        ax.set_title(f"{vehicle} (L: {truck['max_length']}m, W: {truck['max_width']}m)", fontsize=14)
+        ax.set_xlim(0, truck["max_length"])
+        ax.set_ylim(0, truck["max_width"])
+        ax.set_aspect('equal')
+        ax.set_xlabel("Length (m)")
+        ax.set_ylabel("Width (m)")
+        ax.set_xticks(range(int(truck["max_length"]) + 1))
+        ax.set_yticks(range(int(truck["max_width"]) + 1))
+        ax.tick_params(axis='both', which='major', labelsize=10)
+        ax.set_facecolor('white')
+        ax.grid(False)
 
-                if y_offset + pw > vehicle_info['max_width']:
-                    st.warning(f"Parcel {pid} visually overflows truck area — adjust parcel size or layout.")
-                    continue
+        for p in parcels:
+            i, x, y, l, w = p
+            rect = patches.Rectangle((x, y), l, w, linewidth=1.5, edgecolor='black', facecolor='skyblue')
+            ax.add_patch(rect)
+            ax.text(x + l / 2, y + w / 2, f"{i + 1}", ha='center', va='center', fontsize=12, color='black')
 
-                rect = patches.Rectangle((x_offset, y_offset), pl, pw, edgecolor='blue', facecolor='skyblue', lw=2)
-                ax.add_patch(rect)
-                ax.text(x_offset + pl/2, y_offset + pw/2, f"P{int(pid)}", ha='center', va='center', fontsize=8, color='black')
+    plt.tight_layout()
+    st.pyplot(fig)
 
-                x_offset += pl
-                max_row_height = max(max_row_height, pw)
-
-            st.pyplot(fig)
+# Run Optimization button and logic with progress bar
+if st.button("Run Optimization"):
+    total_parcels = len(weights)
+    if total_parcels == 0:
+        st.warning("No parcels to optimize. Please add parcel data.")
     else:
-        st.warning("No solution found. Please adjust parcel dimensions or weights.")
+        unassigned = list(range(total_parcels))
+        all_assignment = {}
+        used_trucks = set()
+        total_cost = 0
+        all_layout = {}
+        attempt = 1
+        max_attempts = 100  # Safety cap on retries
 
+        progress_text = st.empty()
+        progress_bar = st.progress(0)
+
+        while unassigned and attempt <= max_attempts:
+            progress_text.text(f"Optimization attempt: {attempt}")
+            progress_bar.progress(attempt / max_attempts)
+
+            assignment, used, cost = run_optimizer(unassigned)
+            layout, failed = fit_layout(assignment)
+
+            for i in assignment:
+                if i not in failed:
+                    all_assignment[i] = assignment[i]
+
+            for v, layout_list in layout.items():
+                if v not in all_layout:
+                    all_layout[v] = []
+                all_layout[v].extend(layout_list)
+
+            unassigned = failed
+            used_trucks.update(used)
+            total_cost += cost
+
+            if not failed:
+                break
+            attempt += 1
+
+        progress_bar.progress(1.0)
+        progress_text.text("Optimization complete.")
+
+        if unassigned:
+            st.error("Some parcels could not be placed after retries.")
+        else:
+            st.success(f"All parcels placed")
+
+            # Show truck summary with parcel counts
+            truck_summary = pd.Series(list(all_assignment.values())).value_counts().reset_index()
+            truck_summary.columns = ["Truck", "Number of Parcels"]
+            st.dataframe(truck_summary)
+
+            visualize_layout(all_layout)
