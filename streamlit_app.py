@@ -20,16 +20,16 @@ st.markdown(
 
 # Vehicle data
 vehicle_data = [
-    ("Small van", 1.5, 1.2, 1.1, 360, 1.44, 80),
-    ("Medium wheel base", 3, 1.2, 1.9, 1400, 3.6, 50),
-    ("Sprinter van", 4.2, 1.2, 1.75, 950, 5.04, 85),
-    ("luton van", 4, 2, 2, 1000, 8, 110),
-    ("7.5T CS", 6, 2.4, 2.2, 2600, 14.4, 100),
-    ("18T CS", 8, 2.4, 2.3, 9800, 19.2, 130),
-    ("40ft CS", 13.5, 2.5, 3, 28000, 33.75, 140),
-    ("20ft FB", 8, 2.4, 300, 10500, 19.2, 110),
-    ("40ft FB", 13.5, 2.4, 300, 30000, 32.4, 135),
-    ("40T Low Loader", 13.5, 2.4, 300, 30000, 32.4, 135),
+    ("Small van", 1.8, 1.44, 1.1, 360, 1.728, 80),
+    ("Medium wheel base", 3.6, 1.44, 1.9, 1400, 4.32, 50),
+    ("Sprinter van", 5.04, 1.44, 1.75, 950, 6.048, 85),
+    ("luton van", 4.8, 2.4, 2, 1000, 9.6, 110),
+    ("7.5T CS", 7.2, 2.88, 2.2, 2600, 17.28, 100),
+    ("18T CS", 9.6, 2.88, 2.3, 9800, 23.04, 130),
+    ("40ft CS", 16.2, 3.0, 3, 28000, 40.5, 135),
+    ("20ft FB", 9.6, 2.88, 300, 10500, 23.04, 110),
+    ("40ft FB", 16.2, 2.88, 300, 30000, 38.88, 140),
+    ("40T Low Loader", 16.2, 2.88, 300, 30000, 38.88, 145),
 ]
 
 vehicles = {}
@@ -41,12 +41,12 @@ for i in range(1, 11):
             "max_height": h,
             "max_weight": wt,
             "max_area": ar,
-            "cost": cost
+            "cost": cost + 50  # Add driver cost
         }
 
 # Input form
-st.header("Parcel Inputs")
-num_individual = st.number_input("Number of Individual Parcels", min_value=0, max_value=200, value=0)
+st.header("Inventory Inputs")
+num_individual = st.number_input("Number of Individual Inventory", min_value=0, max_value=200, value=0)
 weights, lengths, widths, heights = [], [], [], []
 cols = st.columns(5)
 for i in range(num_individual):
@@ -62,9 +62,8 @@ for i in range(num_individual):
         st.markdown("&nbsp;")
 
 st.markdown("---")
-st.subheader("Bulk Parcel Entries")
-bulk_entries = st.number_input("Number of Bulk Parcel Types", min_value=0, max_value=10, value=0)
-bulk_data = []
+st.subheader("Bulk Inventory Entries")
+bulk_entries = st.number_input("Number of Bulk Inventory Types", min_value=0, max_value=10, value=0)
 
 for i in range(bulk_entries):
     st.markdown(f"**Bulk Parcel Type {i+1}**")
@@ -199,7 +198,7 @@ def visualize_layout(layout_data):
     plt.tight_layout()
     st.pyplot(fig)
 
-# Run Optimization button and logic with progress bar
+# ✅ Always render the button
 if st.button("Run Optimization"):
     if not valid_parcels:
         st.error("No valid parcels to optimize. All parcels exceed truck dimensions.")
