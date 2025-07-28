@@ -20,15 +20,16 @@ st.markdown(
 
 # Vehicle data
 vehicle_data = [
-    ("Small van", 1.5, 1.2, 1, 350, 1.8, 80),
-    ("Short wheel base", 2, 1.2, 1.3, 800, 2.4, 95),
-    ("Medium wheel base", 3, 1.2, 1.9, 1400, 3.6, 50),
-    ("4 meter sprinter", 4.2, 1.25, 1.9, 1250, 5.25, 85),
-    ("luton van", 4, 2, 2, 1000, 8, 110),
-    ("7.5 tonne", 6, 2.3, 2.3, 2800, 13.8, 100),
-    ("18 tonne", 7.3, 2.4, 2.4, 9000, 17.52, 130),
-    ("26 tonne", 8, 2.4, 2.5, 15000, 19.2, 140),
-    ("arctic", 13.5, 2.5, 2.7, 24000, 33.75, 200),
+    ("Small van", 1.8, 1.44, 1.1, 360, 1.73, 80),
+    ("Medium wheel base", 3.6, 1.44, 1.9, 1400, 4.32, 50),
+    ("Sprinter van", 5.04, 1.44, 1.75, 950, 6.05, 85),
+    ("luton van", 4.8, 2.4, 2, 1000, 9.6, 110),
+    ("7.5T CS", 7.2, 2.88, 2.2, 2600, 17.28, 100),
+    ("18T CS", 9.6, 2.88, 2.3, 9800, 23.04, 130),
+    ("40ft CS", 16.2, 3, 3, 28000, 40.5, 140),
+    ("20ft FB", 9.6, 2.88, 300, 10500, 23.04, 110),
+    ("40ft FB", 16.2, 2.88, 300, 30000, 38.88, 135),
+    ("40T Low Loader", 16.2, 2.88, 300, 30000, 38.88, 135),
 ]
 
 vehicles = {}
@@ -87,6 +88,25 @@ for i in range(bulk_entries):
 
 areas = [lengths[i] * widths[i] for i in range(len(weights))]
 
+# Pre-validation for dimension constraints
+valid_parcels = []
+invalid_parcels = []
+
+for i in range(len(weights)):
+    fits_any_truck = any(
+        lengths[i] <= v["max_length"] and
+        widths[i] <= v["max_width"] and
+        heights[i] <= v["max_height"]
+        for v in vehicles.values()
+    )
+    if fits_any_truck:
+        valid_parcels.append(i)
+    else:
+        invalid_parcels.append(i)
+
+if invalid_parcels:
+    st.warning(f"{len(invalid_parcels)} parcel(s) were too large to fit in any truck and were excluded from optimization.")
+
 # Optimizer function
 def run_optimizer(parcel_indices):
     model = pulp.LpProblem("Truck Optimization", pulp.LpMinimize)
@@ -130,6 +150,8 @@ def fit_layout(assignment):
             placed = False
             for rotate in [(L, W), (W, L)]:
                 l, w = rotate
+                if l > truck["max_length"] or w > truck["max_width"]:
+                    continue
                 if x_cursor + l <= truck["max_length"] and y_cursor + w <= truck["max_width"]:
                     layout[v].append((i, x_cursor, y_cursor, l, w))
                     x_cursor += l
@@ -140,7 +162,7 @@ def fit_layout(assignment):
                 x_cursor = 0
                 y_cursor += row_height
                 row_height = 0
-                if y_cursor + W <= truck["max_width"]:
+                if L <= truck["max_length"] and W <= truck["max_width"] and y_cursor + W <= truck["max_width"]:
                     layout[v].append((i, x_cursor, y_cursor, L, W))
                     x_cursor += L
                     row_height = W
@@ -179,17 +201,16 @@ def visualize_layout(layout_data):
 
 # Run Optimization button and logic with progress bar
 if st.button("Run Optimization"):
-    total_parcels = len(weights)
-    if total_parcels == 0:
-        st.warning("No parcels to optimize. Please add parcel data.")
+    if not valid_parcels:
+        st.error("No valid parcels to optimize. All parcels exceed truck dimensions.")
     else:
-        unassigned = list(range(total_parcels))
+        unassigned = valid_parcels.copy()
         all_assignment = {}
         used_trucks = set()
         total_cost = 0
         all_layout = {}
         attempt = 1
-        max_attempts = 100  # Safety cap on retries
+        max_attempts = 100
 
         progress_text = st.empty()
         progress_bar = st.progress(0)
@@ -224,9 +245,9 @@ if st.button("Run Optimization"):
         if unassigned:
             st.error("Some parcels could not be placed after retries.")
         else:
-            st.success(f"All parcels placed")
+            st.success("All parcels placed successfully.")
 
-            # Show truck summary with parcel counts
+        if all_assignment:
             truck_summary = pd.Series(list(all_assignment.values())).value_counts().reset_index()
             truck_summary.columns = ["Truck", "Number of Parcels"]
             st.dataframe(truck_summary)
