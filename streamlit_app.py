@@ -20,7 +20,7 @@ st.markdown(
 
 # Vehicle data
 vehicle_data = [
-    ("Small van", 1.8, 1.44, 1.1, 360, 2,59, 80),
+    ("Small van", 1.8, 1.44, 1.1, 360, 2.59, 80),
     ("Medium wheel base", 3.6, 1.44, 1.9, 1400, 5.184, 50),
     ("Sprinter van", 5.04, 1.44, 1.75, 950, 7.25, 85),
     ("luton van", 4.8, 2.4, 2, 1000, 11.52, 110),
