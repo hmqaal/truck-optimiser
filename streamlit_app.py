@@ -20,16 +20,16 @@ st.markdown(
 
 # Vehicle data
 vehicle_data = [
-    ("Small van", 1.8, 1.44, 1.1, 360, 2.59, 80),
-    ("Medium wheel base", 3.6, 1.44, 1.9, 1400, 5.184, 50),
-    ("Sprinter van", 5.04, 1.44, 1.75, 950, 7.25, 85),
-    ("luton van", 4.8, 2.4, 2, 1000, 11.52, 110),
-    ("7.5T CS", 7.2, 2.88, 2.2, 2600, 20.73, 100),
-    ("18T CS", 9.6, 2.88, 2.3, 9800, 27.64, 130),
-    ("40ft CS", 16.2, 3.0, 3, 28000, 48.6, 135),
-    ("20ft FB", 9.6, 2.88, 300, 10500, 27.64, 110),
-    ("40ft FB", 16.2, 2.88, 300, 30000, 46.65, 140),
-    ("40T Low Loader", 16.2, 2.88, 300, 30000, 46.65, 145),
+    ("Small van", 1.5, 1.2, 1.1, 360, 1.8, 50),
+    ("Medium wheel base", 3, 1.2, 1.9, 1400, 3.6, 80),
+    ("Sprinter van", 4.2, 1.2, 1.75, 950, 5.04, 85),
+    ("luton van", 4, 2, 2, 1000, 8, 110),
+    ("7.5T CS", 6, 2.88, 2.2, 2600, 17.28, 100),
+    ("18T CS", 7.3, 2.88, 2.3, 9800, 21.024, 125),
+    ("40ft CS", 13.5, 3, 3, 28000, 40.5, 135),
+    ("20ft FB", 7.3, 2.4, 300, 10500, 17.52, 130),
+    ("40ft FB", 13.5, 2.4, 300, 30000, 32.4, 140),
+    ("40T Low Loader", 13.5, 2.4, 300, 30000, 32.4, 145),
 ]
 
 vehicles = {}
@@ -63,7 +63,7 @@ for i in range(num_individual):
 
 st.markdown("---")
 st.subheader("Bulk Inventory Entries")
-bulk_entries = st.number_input("Number of Bulk Inventory Types", min_value=0, max_value=10, value=0)
+bulk_entries = st.number_input("Number of Bulk Inventory Types", min_value=0, max_value=20, value=0)
 
 for i in range(bulk_entries):
     st.markdown(f"**Bulk Parcel Type {i+1}**")
@@ -87,45 +87,51 @@ for i in range(bulk_entries):
 
 areas = [lengths[i] * widths[i] for i in range(len(weights))]
 
-# Pre-validation for dimension constraints
-valid_parcels = []
+# ✅ New: Feasible vehicle mapping (with rotation-aware logic)
+parcel_feasible_vehicles = {}
 invalid_parcels = []
 
 for i in range(len(weights)):
-    fits_any_truck = any(
-        lengths[i] <= v["max_length"] and
-        widths[i] <= v["max_width"] and
-        heights[i] <= v["max_height"]
-        for v in vehicles.values()
-    )
-    if fits_any_truck:
-        valid_parcels.append(i)
+    fits_in = []
+    for truck_name, v in vehicles.items():
+        for l, w in [(lengths[i], widths[i]), (widths[i], lengths[i])]:
+            if (
+                l <= v["max_length"] and
+                w <= v["max_width"] and
+                heights[i] <= v["max_height"]
+            ):
+                fits_in.append(truck_name)
+                break
+    if fits_in:
+        parcel_feasible_vehicles[i] = fits_in
     else:
         invalid_parcels.append(i)
 
 if invalid_parcels:
     st.warning(f"{len(invalid_parcels)} parcel(s) were too large to fit in any truck and were excluded from optimization.")
 
-# Optimizer function
+valid_parcels = list(parcel_feasible_vehicles.keys())
+
+# Optimizer
 def run_optimizer(parcel_indices):
     model = pulp.LpProblem("Truck Optimization", pulp.LpMinimize)
-    x = pulp.LpVariable.dicts("Assign", ((i, j) for i in parcel_indices for j in vehicles), cat="Binary")
+    x = pulp.LpVariable.dicts("Assign", ((i, j) for i in parcel_indices for j in parcel_feasible_vehicles[i]), cat="Binary")
     y = pulp.LpVariable.dicts("UseVehicle", (j for j in vehicles), cat="Binary")
 
     model += pulp.lpSum(vehicles[j]["cost"] * y[j] for j in vehicles)
 
     for i in parcel_indices:
-        model += pulp.lpSum(x[i, j] for j in vehicles) == 1
+        model += pulp.lpSum(x[i, j] for j in parcel_feasible_vehicles[i]) == 1
 
     for j in vehicles:
-        model += pulp.lpSum(weights[i] * x[i, j] for i in parcel_indices) <= vehicles[j]["max_weight"] * y[j]
-        model += pulp.lpSum(areas[i] * x[i, j] for i in parcel_indices) <= vehicles[j]["max_area"] + BIG_M * (1 - y[j])
+        model += pulp.lpSum(weights[i] * x[i, j] for i in parcel_indices if j in parcel_feasible_vehicles[i]) <= vehicles[j]["max_weight"] * y[j]
+        model += pulp.lpSum(areas[i] * x[i, j] for i in parcel_indices if j in parcel_feasible_vehicles[i]) <= vehicles[j]["max_area"] + BIG_M * (1 - y[j])
 
     model.solve(pulp.PULP_CBC_CMD(msg=False))
 
     assignment, used_vehicles = {}, set()
     for i in parcel_indices:
-        for j in vehicles:
+        for j in parcel_feasible_vehicles[i]:
             if pulp.value(x[i, j]) == 1:
                 assignment[i] = j
                 used_vehicles.add(j)
@@ -134,7 +140,7 @@ def run_optimizer(parcel_indices):
     total_cost = pulp.value(model.objective)
     return assignment, used_vehicles, total_cost
 
-# Layout fitting function
+# Layout fitting
 def fit_layout(assignment):
     failed = []
     layout = {v: [] for v in set(assignment.values())}
@@ -169,7 +175,7 @@ def fit_layout(assignment):
                     failed.append(i)
     return layout, failed
 
-# Visualization function
+# Visualization
 def visualize_layout(layout_data):
     fig, axes = plt.subplots(len(layout_data), 1, figsize=(10, 5 * len(layout_data)))
     if len(layout_data) == 1:
@@ -198,7 +204,7 @@ def visualize_layout(layout_data):
     plt.tight_layout()
     st.pyplot(fig)
 
-# ✅ Always render the button
+# Run optimization
 if st.button("Run Optimization"):
     if not valid_parcels:
         st.error("No valid parcels to optimize. All parcels exceed truck dimensions.")
