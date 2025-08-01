@@ -183,7 +183,7 @@ def visualize_layout(layout_data):
 
     for ax, (vehicle, parcels) in zip(axes, layout_data.items()):
         truck = vehicles[vehicle]
-        ax.set_title(f"{vehicle} (L: {truck['max_length']}m, W: {truck['max_width']}m)", fontsize=14)
+        ax.set_title(f"{vehicle} (L: {truck['max_length']}m, W: {truck['max_width']}m)", H: {truck['max_height']}m)" ,  fontsize=14)
         ax.set_xlim(0, truck["max_length"])
         ax.set_ylim(0, truck["max_width"])
         ax.set_aspect('equal')
