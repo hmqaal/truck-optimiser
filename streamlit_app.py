@@ -12,7 +12,7 @@ st.markdown(
     """
     <div style="background-color: #00008B; padding: 20px 10px; border-radius: 8px; text-align: center; border: 1px solid #ddd;">
         <h1 style="color: #FFFFFF; margin-bottom: 5px;">🚚 Truck Optimiser</h1>
-        <p style="color: #FFFFFF; font-size: 18px;">Optimise parcel placement in trucks for cost-effective and efficient booking</p>
+        <p style="color: #FFFFFF; font-size: 18px;">Optimise inventory placement in trucks for cost-effective and efficient booking</p>
     </div>
     """,
     unsafe_allow_html=True
