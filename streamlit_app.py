@@ -51,13 +51,13 @@ weights, lengths, widths, heights = [], [], [], []
 cols = st.columns(5)
 for i in range(num_individual):
     with cols[0]:
-        weights.append(st.number_input(f"Weight {i+1}", key=f"wt_{i}", value=100.0))
+        weights.append(st.number_input(f"Weight {i+1} (kg)", key=f"wt_{i}", value=100.0))
     with cols[1]:
-        lengths.append(st.number_input(f"Length {i+1}", key=f"len_{i}", value=1.0))
+        lengths.append(st.number_input(f"Length {i+1} (m)", key=f"len_{i}", value=1.0))
     with cols[2]:
-        widths.append(st.number_input(f"Width {i+1}", key=f"wid_{i}", value=1.0))
+        widths.append(st.number_input(f"Width {i+1} (m)", key=f"wid_{i}", value=1.0))
     with cols[3]:
-        heights.append(st.number_input(f"Height {i+1}", key=f"hei_{i}", value=1.0))
+        heights.append(st.number_input(f"Height {i+1} (m)", key=f"hei_{i}", value=1.0))
     with cols[4]:
         st.markdown("&nbsp;")
 
@@ -71,13 +71,13 @@ for i in range(bulk_entries):
     with c1:
         quantity = st.number_input(f"Quantity", min_value=1, value=1, key=f"qty_{i}")
     with c2:
-        weight = st.number_input("Weight", value=100.0, key=f"b_wt_{i}")
+        weight = st.number_input("Weight (kg)", value=100.0, key=f"b_wt_{i}")
     with c3:
-        length = st.number_input("Length", value=1.0, key=f"b_len_{i}")
+        length = st.number_input("Length (m)", value=1.0, key=f"b_len_{i}")
     with c4:
-        width = st.number_input("Width", value=1.0, key=f"b_wid_{i}")
+        width = st.number_input("Width (m)", value=1.0, key=f"b_wid_{i}")
     with c5:
-        height = st.number_input("Height", value=1.0, key=f"b_hei_{i}")
+        height = st.number_input("Height (m)", value=1.0, key=f"b_hei_{i}")
 
     for _ in range(quantity):
         weights.append(weight)
