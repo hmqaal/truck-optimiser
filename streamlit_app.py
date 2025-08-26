@@ -255,6 +255,7 @@ if st.button("Run Optimization"):
         if all_assignment:
             truck_summary = pd.Series(list(all_assignment.values())).value_counts().reset_index()
             truck_summary.columns = ["Truck", "Number of Parcels"]
+            st.markdown(f"### 💰 Total Cost of Optimized Truck Selection: £{total_cost:.2f}")
             st.dataframe(truck_summary)
 
             visualize_layout(all_layout)
