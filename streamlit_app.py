@@ -168,6 +168,18 @@ def fit_layout_for_truck(parcel_indices, truck_name):
             if not placed:
                 failed.append(i)
     return layout, failed
+
+# ✅ Helper to fit layout for multiple trucks from optimiser assignment
+#    (Moved ABOVE first use to avoid NameError)
+def fit_layout_for_truck_list(assignment):
+    failed = []
+    layout_dict = {v: [] for v in set(assignment.values())}
+    for v in layout_dict:
+        layout, fail = fit_layout_for_truck([i for i, a in assignment.items() if a == v], v)
+        layout_dict[v].extend(layout)
+        failed.extend(fail)
+    return layout_dict, failed
+
 # Visualisation
 def visualize_layout(layout_data):
     fig, axes = plt.subplots(len(layout_data), 1, figsize=(10, 5 * len(layout_data)))
@@ -196,7 +208,6 @@ def visualize_layout(layout_data):
 
     plt.tight_layout()
     st.pyplot(fig)
-
 
 # -------------------------
 # Stage B: New truck trial logic
@@ -243,10 +254,10 @@ if st.button("Run Optimization"):
 
             if not placed_this_round:
                 # No single truck could take all parcels — pick the most expensive and run optimiser loop
-                most_expensive_truck = max(sorted_trucks, key=lambda t: vehicles[t]["cost"])
+                most_expensive_truck = max(sorted_trucks, key=lambda t: vehicles[t]["cost"])  # (kept if you plan to use it)
                 # Run optimiser on unassigned as before
                 assignment, used, _ = run_optimizer(unassigned)
-                layout, failed = fit_layout_for_truck_list(assignment)  # We'll define helper below
+                layout, failed = fit_layout_for_truck_list(assignment)  # ✅ now defined above
 
                 for i in assignment:
                     if i not in failed:
@@ -277,14 +288,3 @@ if st.button("Run Optimization"):
             st.markdown(f"### 💰 Total Cost of Optimized Truck Selection: £{total_cost:.2f}")
             st.dataframe(truck_summary)
             visualize_layout(all_layout)
-
-
-# Helper to fit layout for multiple trucks from optimiser assignment
-def fit_layout_for_truck_list(assignment):
-    failed = []
-    layout_dict = {v: [] for v in set(assignment.values())}
-    for v in layout_dict:
-        layout, fail = fit_layout_for_truck([i for i, a in assignment.items() if a == v], v)
-        layout_dict[v].extend(layout)
-        failed.extend(fail)
-    return layout_dict, failed
