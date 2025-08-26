@@ -7,7 +7,7 @@ import matplotlib.patches as patches
 BIG_M = 10000
 EPSILON = 0.001
 
-st.set_page_config(page_title="Truck O", layout="wide")
+st.set_page_config(page_title="Truck Optimiser", layout="wide")
 st.markdown(
     """
     <div style="background-color: #00008B; padding: 20px 10px; border-radius: 8px; text-align: center; border: 1px solid #ddd;">
