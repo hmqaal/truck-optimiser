@@ -41,7 +41,7 @@ for i in range(1, 11):
             "max_height": h,
             "max_weight": wt,
             "max_area": ar,
-            "cost": cost + 0  # Add driver cost
+            "cost": cost
         }
 
 # Input form
@@ -87,19 +87,17 @@ for i in range(bulk_entries):
 
 areas = [lengths[i] * widths[i] for i in range(len(weights))]
 
-# ✅ New: Feasible vehicle mapping (with rotation-aware logic)
+# Stage A: Feasible vehicle mapping
 parcel_feasible_vehicles = {}
 invalid_parcels = []
 
 for i in range(len(weights)):
     fits_in = []
     for truck_name, v in vehicles.items():
+        if weights[i] > v["max_weight"] or areas[i] > v["max_area"]:
+            continue
         for l, w in [(lengths[i], widths[i]), (widths[i], lengths[i])]:
-            if (
-                l <= v["max_length"] and
-                w <= v["max_width"] and
-                heights[i] <= v["max_height"]
-            ):
+            if l <= v["max_length"] and w <= v["max_width"] and heights[i] <= v["max_height"]:
                 fits_in.append(truck_name)
                 break
     if fits_in:
@@ -140,42 +138,37 @@ def run_optimizer(parcel_indices):
     total_cost = pulp.value(model.objective)
     return assignment, used_vehicles, total_cost
 
-# Layout fitting
-def fit_layout(assignment):
+# Layout fitting for a single truck
+def fit_layout_for_truck(parcel_indices, truck_name):
+    truck = vehicles[truck_name]
+    layout = []
     failed = []
-    layout = {v: [] for v in set(assignment.values())}
-
-    for v in layout:
-        truck = vehicles[v]
-        parcels = [i for i, a in assignment.items() if a == v]
-        x_cursor, y_cursor, row_height = 0, 0, 0
-
-        for i in parcels:
-            L, W = lengths[i], widths[i]
-            placed = False
-            for rotate in [(L, W), (W, L)]:
-                l, w = rotate
-                if l > truck["max_length"] or w > truck["max_width"]:
-                    continue
+    x_cursor, y_cursor, row_height = 0, 0, 0
+    for i in parcel_indices:
+        placed = False
+        for l, w in [(lengths[i], widths[i]), (widths[i], lengths[i])]:
+            if l <= truck["max_length"] and w <= truck["max_width"]:
                 if x_cursor + l <= truck["max_length"] and y_cursor + w <= truck["max_width"]:
-                    layout[v].append((i, x_cursor, y_cursor, l, w))
+                    layout.append((i, x_cursor, y_cursor, l, w))
+                    x_cursor += l
+                    row_height = max(row_height, w)
+                    placed = True
+                    break
+        if not placed:
+            x_cursor = 0
+            y_cursor += row_height
+            row_height = 0
+            for l, w in [(lengths[i], widths[i]), (widths[i], lengths[i])]:
+                if l <= truck["max_length"] and w <= truck["max_width"] and y_cursor + w <= truck["max_width"]:
+                    layout.append((i, x_cursor, y_cursor, l, w))
                     x_cursor += l
                     row_height = max(row_height, w)
                     placed = True
                     break
             if not placed:
-                x_cursor = 0
-                y_cursor += row_height
-                row_height = 0
-                if L <= truck["max_length"] and W <= truck["max_width"] and y_cursor + W <= truck["max_width"]:
-                    layout[v].append((i, x_cursor, y_cursor, L, W))
-                    x_cursor += L
-                    row_height = W
-                else:
-                    failed.append(i)
+                failed.append(i)
     return layout, failed
-
-# Visualization
+# Visualisation
 def visualize_layout(layout_data):
     fig, axes = plt.subplots(len(layout_data), 1, figsize=(10, 5 * len(layout_data)))
     if len(layout_data) == 1:
@@ -183,7 +176,7 @@ def visualize_layout(layout_data):
 
     for ax, (vehicle, parcels) in zip(axes, layout_data.items()):
         truck = vehicles[vehicle]
-        ax.set_title(f"{vehicle} (L: {truck['max_length']}m, W: {truck['max_width']}m, H: {truck['max_height']}m)",  fontsize=14)
+        ax.set_title(f"{vehicle} (L: {truck['max_length']}m, W: {truck['max_width']}m, H: {truck['max_height']}m)", fontsize=14)
         ax.set_xlim(0, truck["max_length"])
         ax.set_ylim(0, truck["max_width"])
         ax.set_aspect('equal')
@@ -204,7 +197,10 @@ def visualize_layout(layout_data):
     plt.tight_layout()
     st.pyplot(fig)
 
-# Run optimization
+
+# -------------------------
+# Stage B: New truck trial logic
+# -------------------------
 if st.button("Run Optimization"):
     if not valid_parcels:
         st.error("No valid parcels to optimize. All parcels exceed truck dimensions.")
@@ -212,36 +208,58 @@ if st.button("Run Optimization"):
         unassigned = valid_parcels.copy()
         all_assignment = {}
         used_trucks = set()
-        total_cost = 0
         all_layout = {}
-        attempt = 1
-        max_attempts = 100
 
         progress_text = st.empty()
         progress_bar = st.progress(0)
+
+        attempt = 1
+        max_attempts = 100
 
         while unassigned and attempt <= max_attempts:
             progress_text.text(f"Optimization attempt: {attempt}")
             progress_bar.progress(attempt / max_attempts)
 
-            assignment, used, cost = run_optimizer(unassigned)
-            layout, failed = fit_layout(assignment)
+            # Sort all trucks by cost
+            sorted_trucks = sorted(vehicles.keys(), key=lambda t: vehicles[t]["cost"])
 
-            for i in assignment:
-                if i not in failed:
-                    all_assignment[i] = assignment[i]
+            placed_this_round = False
 
-            for v, layout_list in layout.items():
-                if v not in all_layout:
-                    all_layout[v] = []
-                all_layout[v].extend(layout_list)
+            # Try each truck in ascending cost order
+            for truck_name in sorted_trucks:
+                # Only consider if all parcels fit dimensionally in this truck
+                layout, failed = fit_layout_for_truck(unassigned, truck_name)
+                if not failed:
+                    # All parcels fit in this truck
+                    for i in unassigned:
+                        all_assignment[i] = truck_name
+                    if truck_name not in all_layout:
+                        all_layout[truck_name] = []
+                    all_layout[truck_name].extend(layout)
+                    used_trucks.add(truck_name)
+                    unassigned = []
+                    placed_this_round = True
+                    break  # stop trying trucks
 
-            unassigned = failed
-            used_trucks.update(used)
-            total_cost += cost
+            if not placed_this_round:
+                # No single truck could take all parcels — pick the most expensive and run optimiser loop
+                most_expensive_truck = max(sorted_trucks, key=lambda t: vehicles[t]["cost"])
+                # Run optimiser on unassigned as before
+                assignment, used, _ = run_optimizer(unassigned)
+                layout, failed = fit_layout_for_truck_list(assignment)  # We'll define helper below
 
-            if not failed:
-                break
+                for i in assignment:
+                    if i not in failed:
+                        all_assignment[i] = assignment[i]
+
+                for v, layout_list in layout.items():
+                    if v not in all_layout:
+                        all_layout[v] = []
+                    all_layout[v].extend(layout_list)
+
+                unassigned = failed
+                used_trucks.update(used)
+
             attempt += 1
 
         progress_bar.progress(1.0)
@@ -253,9 +271,20 @@ if st.button("Run Optimization"):
             st.success("All parcels placed successfully.")
 
         if all_assignment:
+            total_cost = sum(vehicles[v]["cost"] for v in used_trucks)
             truck_summary = pd.Series(list(all_assignment.values())).value_counts().reset_index()
             truck_summary.columns = ["Truck", "Number of Parcels"]
             st.markdown(f"### 💰 Total Cost of Optimized Truck Selection: £{total_cost:.2f}")
             st.dataframe(truck_summary)
-
             visualize_layout(all_layout)
+
+
+# Helper to fit layout for multiple trucks from optimiser assignment
+def fit_layout_for_truck_list(assignment):
+    failed = []
+    layout_dict = {v: [] for v in set(assignment.values())}
+    for v in layout_dict:
+        layout, fail = fit_layout_for_truck([i for i, a in assignment.items() if a == v], v)
+        layout_dict[v].extend(layout)
+        failed.extend(fail)
+    return layout_dict, failed
