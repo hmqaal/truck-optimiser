@@ -1,4 +1,6 @@
-streamlit
-pulp
-pandas
-matplotlib
+streamlit>=1.36
+pulp>=2.8
+pandas>=2.2
+matplotlib>=3.8
+rectpack>=0.2.2
+coin-or-cbc>=2.10.10
