@@ -3,10 +3,38 @@ import pulp
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+from collections import Counter
 
+# =========================
+# Globals / constants
+# =========================
 BIG_M = 10000
 EPSILON = 0.001
+CBC_TIME_LIMIT_SEC = 45          # MIP solver time cap
+NO_PROGRESS_MAX = 3              # stop if no progress this many rounds
+CLONES_PER_TYPE = 5              # <-- FIXED number of clones for every vehicle type
+debug_log = []                   # UI-visible debug lines
 
+def dbg(msg: str):
+    print(msg)
+    debug_log.append(msg)
+
+# =========================
+# Optional dependency: rectpack (MaxRects)
+# =========================
+try:
+    from rectpack import newPacker
+    from rectpack.maxrects import MaxRectsBssf, MaxRectsBaf
+    from rectpack.packer import SORT_AREA
+    HAS_RECTPACK = True
+except Exception:
+    HAS_RECTPACK = False
+    MaxRectsBssf = MaxRectsBaf = None
+    SORT_AREA = None
+
+# =========================
+# Streamlit config & sidebar
+# =========================
 st.set_page_config(page_title="Truck Optimiser", layout="wide")
 st.markdown(
     """
@@ -18,36 +46,38 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# Vehicle data
-vehicle_data = [
-    ("Small van", 1.5, 1.2, 1.1, 360, 1.8, 100),
-    ("Medium wheel base", 3, 1.2, 1.9, 1400, 3.6, 130),
-    ("Sprinter van", 4.2, 1.2, 1.75, 950, 5.04, 135),
-    ("luton van", 4, 2, 2, 1000, 8, 160),
-    ("7.5T CS", 6, 2.88, 2.2, 2600, 17.28, 150),
-    ("18T CS", 7.3, 2.88, 2.3, 9800, 21.024, 175),
-    ("40ft CS", 13.5, 3, 3, 28000, 40.5, 185),
-    ("20ft FB", 7.3, 2.4, 300, 10500, 17.52, 180),
-    ("40ft FB", 13.5, 2.4, 300, 30000, 32.4, 190),
-    ("40T Low Loader", 13.5, 2.4, 300, 30000, 32.4, 195),
+show_debug = st.sidebar.checkbox("Show debug panel", value=False)
+
+pack_options = ["MaxRects (BSSF)", "MaxRects (BAF)", "Shelf (Greedy)"]
+default_idx = (0 if HAS_RECTPACK else 2)
+PACK_MODE = st.sidebar.selectbox("Packing algorithm", pack_options, index=default_idx)
+
+if ("MaxRects" in PACK_MODE) and (not HAS_RECTPACK):
+    st.sidebar.warning("rectpack not installed — falling back to Shelf (Greedy). Add `rectpack` to requirements.txt.")
+
+# =========================
+# Vehicle TYPES (base specs; clones are created below with a FIXED count)
+# =========================
+vehicle_types = [
+    ("Small van",        1.5,  1.2,   1.1,   360,   1.8,    100),
+    ("Medium wheel base",3.0,  1.2,   1.9,  1400,   3.6,    130),
+    ("Sprinter van",     4.2,  1.2,   1.75,  950,   5.04,   135),
+    ("luton van",        4.0,  2.0,   2.0,  1000,   8.0,    160),
+    ("7.5T CS",          6.0,  2.88,  2.2,  2600,  17.28,   150),
+    ("18T CS",           7.3,  2.88,  2.3,  9800,  21.024,  175),
+    ("40ft CS",         13.5,  3.0,   3.0, 28000,  40.5,    185),
+    ("20ft FB",          7.3,  2.4,   300, 10500,  17.52,   180),
+    ("40ft FB",         13.5,  2.4,   300, 30000,  32.4,    190),
+    ("40T Low Loader",  13.5,  2.4,   300, 30000,  32.4,    195),
 ]
 
-vehicles = {}
-for i in range(1, 11):
-    for name, l, w, h, wt, ar, cost in vehicle_data:
-        vehicles[f"{name}{i if i > 1 else ''}"] = {
-            "max_length": l,
-            "max_width": w,
-            "max_height": h,
-            "max_weight": wt,
-            "max_area": ar,
-            "cost": cost
-        }
-
-# Input form
+# =========================
+# Inputs
+# =========================
 st.header("Inventory Inputs")
-num_individual = st.number_input("Number of Individual Inventory", min_value=0, max_value=200, value=0)
 weights, lengths, widths, heights = [], [], [], []
+
+num_individual = st.number_input("Number of Individual Inventory", min_value=0, max_value=200, value=0)
 cols = st.columns(5)
 for i in range(num_individual):
     with cols[0]:
@@ -57,7 +87,7 @@ for i in range(num_individual):
     with cols[2]:
         widths.append(st.number_input(f"Width {i+1} (m)", key=f"wid_{i}", value=1.0))
     with cols[3]:
-        heights.append(st.number_input(f"Height {i+1} (m)", key=f"hei_{i}", value=1.0))
+        heights.append(st.number_input(f"Height (m)", key=f"hei_{i}", value=1.0))
     with cols[4]:
         st.markdown("&nbsp;")
 
@@ -86,20 +116,62 @@ for i in range(bulk_entries):
         heights.append(height)
 
 areas = [lengths[i] * widths[i] for i in range(len(weights))]
+total_weight = sum(weights)
+total_area = sum(areas)
 
-# Stage A: Feasible vehicle mapping
+# =========================
+# Build vehicles with a FIXED number of clones per type
+# =========================
+def build_fixed_vehicles(clones_per_type=CLONES_PER_TYPE):
+    vehicles = {}
+    vehicle_groups = {}  # base name -> [clone names in order]
+    for name, l, w, h, wt_cap, ar_cap, cost in vehicle_types:
+        names = []
+        for i in range(1, clones_per_type + 1):
+            nm = f"{name}{i if i > 1 else ''}"
+            vehicles[nm] = {
+                "base": name,
+                "max_length": l, "max_width": w, "max_height": h,
+                "max_weight": wt_cap, "max_area": ar_cap, "cost": cost
+            }
+            names.append(nm)
+        vehicle_groups[name] = names
+    dbg("Clone caps per type (fixed): " + ", ".join(
+        f"{base}×{len(clones)}" for base, clones in vehicle_groups.items()
+    ))
+    return vehicles, vehicle_groups
+
+vehicles, vehicle_groups = build_fixed_vehicles()
+
+# =========================
+# Stage A: Feasible vehicle mapping (per-parcel; enforces height)
+# =========================
 parcel_feasible_vehicles = {}
 invalid_parcels = []
 
+dbg("\n=== FEASIBILITY CHECK DEBUG ===")
 for i in range(len(weights)):
     fits_in = []
+    dbg(f"\nParcel {i} -> weight={weights[i]}, dims=({lengths[i]} x {widths[i]} x {heights[i]}), area={areas[i]:.2f}")
     for truck_name, v in vehicles.items():
-        if weights[i] > v["max_weight"] or areas[i] > v["max_area"]:
-            continue
-        for l, w in [(lengths[i], widths[i]), (widths[i], lengths[i])]:
-            if l <= v["max_length"] and w <= v["max_width"] and heights[i] <= v["max_height"]:
-                fits_in.append(truck_name)
-                break
+        reason = []
+        if weights[i] > v["max_weight"]:
+            reason.append(f"FAIL weight {weights[i]} > {v['max_weight']}")
+        if areas[i] > v["max_area"]:
+            reason.append(f"FAIL area {areas[i]:.2f} > {v['max_area']}")
+        dim_fit = False
+        if not reason:
+            for l_, w_ in [(lengths[i], widths[i]), (widths[i], lengths[i])]:
+                if l_ <= v["max_length"] and w_ <= v["max_width"] and heights[i] <= v["max_height"]:
+                    dim_fit = True
+                    break
+            if not dim_fit:
+                reason.append("FAIL dims (L/W/H) in both orientations")
+        if not reason:
+            fits_in.append(truck_name)
+            dbg(f"  ✔ {truck_name} PASSES all checks")
+        else:
+            dbg(f"  ✘ {truck_name} excluded: {', '.join(reason)}")
     if fits_in:
         parcel_feasible_vehicles[i] = fits_in
     else:
@@ -110,67 +182,151 @@ if invalid_parcels:
 
 valid_parcels = list(parcel_feasible_vehicles.keys())
 
-# Optimizer
+# =========================
+# Optimizer (tight + symmetry-breaking + time limit)
+# =========================
 def run_optimizer(parcel_indices):
+    dbg("\n=== RUN OPTIMIZER ===")
+    dbg(f"Optimizing parcels: {parcel_indices}")
     model = pulp.LpProblem("Truck Optimization", pulp.LpMinimize)
-    x = pulp.LpVariable.dicts("Assign", ((i, j) for i in parcel_indices for j in parcel_feasible_vehicles[i]), cat="Binary")
-    y = pulp.LpVariable.dicts("UseVehicle", (j for j in vehicles), cat="Binary")
 
-    model += pulp.lpSum(vehicles[j]["cost"] * y[j] for j in vehicles)
+    # domain only where j is feasible for i
+    IJ = [(i, j) for i in parcel_indices for j in parcel_feasible_vehicles[i]]
+    truck_universe = list(vehicles.keys())
 
+    x = pulp.LpVariable.dicts("Assign", IJ, cat="Binary")
+    y = pulp.LpVariable.dicts("UseVehicle", truck_universe, cat="Binary")
+
+    # Minimise total fixed truck costs
+    model += pulp.lpSum(vehicles[j]["cost"] * y[j] for j in truck_universe)
+
+    # Each parcel exactly once
     for i in parcel_indices:
-        model += pulp.lpSum(x[i, j] for j in parcel_feasible_vehicles[i]) == 1
+        feas = [j for j in parcel_feasible_vehicles[i]]
+        model += pulp.lpSum(x[i, j] for j in feas) == 1
 
-    for j in vehicles:
-        model += pulp.lpSum(weights[i] * x[i, j] for i in parcel_indices if j in parcel_feasible_vehicles[i]) <= vehicles[j]["max_weight"] * y[j]
-        model += pulp.lpSum(areas[i] * x[i, j] for i in parcel_indices if j in parcel_feasible_vehicles[i]) <= vehicles[j]["max_area"] + BIG_M * (1 - y[j])
+    # Link x to y
+    for (i, j) in IJ:
+        model += x[i, j] <= y[j]
 
-    model.solve(pulp.PULP_CBC_CMD(msg=False))
+    # Capacities per truck (weight + area; no geometry)
+    for j in truck_universe:
+        feas_i = [i for i in parcel_indices if (i, j) in x]
+        if not feas_i:
+            model += y[j] == 0
+            continue
+        model += pulp.lpSum(weights[i] * x[i, j] for i in feas_i) <= vehicles[j]["max_weight"] * y[j]
+        model += pulp.lpSum(areas[i]   * x[i, j] for i in feas_i) <= vehicles[j]["max_area"]   * y[j]
+
+    # Symmetry breaking across clones: y1 >= y2 >= y3 ... per base type
+    for base, clones in vehicle_groups.items():
+        for k in range(len(clones) - 1):
+            model += y[clones[k]] >= y[clones[k + 1]]
+
+    model.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=CBC_TIME_LIMIT_SEC))
+    dbg(f"Solver status: {pulp.LpStatus[model.status]}")
 
     assignment, used_vehicles = {}, set()
-    for i in parcel_indices:
-        for j in parcel_feasible_vehicles[i]:
-            if pulp.value(x[i, j]) == 1:
-                assignment[i] = j
-                used_vehicles.add(j)
-                break
+    for (i, j) in IJ:
+        if pulp.value(x[i, j]) == 1:
+            assignment[i] = j
+            used_vehicles.add(j)
 
-    total_cost = pulp.value(model.objective)
-    return assignment, used_vehicles, total_cost
+    obj_val = pulp.value(model.objective)
+    dbg(f"Objective={obj_val}, used_vehicles={sorted(list(used_vehicles))}, assigned={len(assignment)}/{len(parcel_indices)}")
+    return assignment, used_vehicles, obj_val
 
-# Layout fitting for a single truck
-def fit_layout_for_truck(parcel_indices, truck_name):
-    truck = vehicles[truck_name]
-    layout = []
-    failed = []
+# =========================
+# Shelf packer (fallback / optional)
+# =========================
+def _shelf_pack_once(order, truck):
+    layout, failed = [], []
     x_cursor, y_cursor, row_height = 0, 0, 0
-    for i in parcel_indices:
+    Lmax, Wmax = truck["max_length"], truck["max_width"]
+
+    for i in order:
         placed = False
-        for l, w in [(lengths[i], widths[i]), (widths[i], lengths[i])]:
-            if l <= truck["max_length"] and w <= truck["max_width"]:
-                if x_cursor + l <= truck["max_length"] and y_cursor + w <= truck["max_width"]:
-                    layout.append((i, x_cursor, y_cursor, l, w))
-                    x_cursor += l
-                    row_height = max(row_height, w)
-                    placed = True
-                    break
+        orientations = sorted(
+            [(lengths[i], widths[i]), (widths[i], lengths[i])],
+            key=lambda lw: lw[1]
+        )
+        for l, w in orientations:
+            if l <= Lmax - x_cursor and w <= Wmax - y_cursor:
+                layout.append((i, x_cursor, y_cursor, l, w))
+                x_cursor += l
+                row_height = max(row_height, w)
+                placed = True
+                break
+        if placed:
+            continue
+        x_cursor = 0
+        y_cursor += row_height
+        row_height = 0
+        for l, w in orientations:
+            if l <= Lmax and w <= Wmax - y_cursor:
+                layout.append((i, x_cursor, y_cursor, l, w))
+                x_cursor += l
+                row_height = max(row_height, w)
+                placed = True
+                break
         if not placed:
-            x_cursor = 0
-            y_cursor += row_height
-            row_height = 0
-            for l, w in [(lengths[i], widths[i]), (widths[i], lengths[i])]:
-                if l <= truck["max_length"] and w <= truck["max_width"] and y_cursor + w <= truck["max_width"]:
-                    layout.append((i, x_cursor, y_cursor, l, w))
-                    x_cursor += l
-                    row_height = max(row_height, w)
-                    placed = True
-                    break
-            if not placed:
-                failed.append(i)
+            failed.append(i)
     return layout, failed
 
-# ✅ Helper to fit layout for multiple trucks from optimiser assignment
-#    (Moved ABOVE first use to avoid NameError)
+def _shelf_fit_layout(parcel_indices, truck_name):
+    truck = vehicles[truck_name]
+    order = sorted(
+        parcel_indices,
+        key=lambda i: (max(lengths[i], widths[i]), min(lengths[i], widths[i])),
+        reverse=True,
+    )
+    layout1, fail1 = _shelf_pack_once(order, truck)
+    order2 = sorted(
+        parcel_indices,
+        key=lambda i: (max(lengths[i], widths[i]), max(lengths[i], widths[i])),
+        reverse=True,
+    )
+    layout2, fail2 = _shelf_pack_once(order2, truck)
+    if len(fail2) < len(fail1) or (len(fail2) == len(fail1) and len(layout2) > len(layout1)):
+        return layout2, fail2
+    return layout1, fail1
+
+# =========================
+# Fit layout for a truck (MaxRects via rectpack, with Shelf fallback)
+# =========================
+def fit_layout_for_truck(parcel_indices, truck_name):
+    truck = vehicles[truck_name]
+    dbg(f"\n=== FIT LAYOUT in '{truck_name}' ===  (algo: {PACK_MODE}{'' if HAS_RECTPACK else ' [fallback Shelf]'})")
+    dbg(f"Truck caps: L={truck['max_length']} W={truck['max_width']} H={truck['max_height']} weight={truck['max_weight']} area={truck['max_area']}")
+
+    if "MaxRects" in PACK_MODE and HAS_RECTPACK:
+        SCALE = 1000
+        algo_cls = MaxRectsBssf if "BSSF" in PACK_MODE else MaxRectsBaf
+
+        packer = newPacker(rotation=True, pack_algo=algo_cls, sort_algo=SORT_AREA)
+        packer.add_bin(int(round(truck["max_length"] * SCALE)), int(round(truck["max_width"] * SCALE)), count=1)
+
+        for i in parcel_indices:
+            w = max(1, int(round(lengths[i] * SCALE)))
+            h = max(1, int(round(widths[i]  * SCALE)))
+            packer.add_rect(w, h, rid=i)
+
+        packer.pack()
+
+        layout, placed = [], set()
+        for b, x, y, w, h, i in packer.rect_list():
+            layout.append((i, x / SCALE, y / SCALE, w / SCALE, h / SCALE))
+            placed.add(i)
+
+        failed = [i for i in parcel_indices if i not in placed]
+        layout.sort(key=lambda t: (t[2], t[1]))
+        dbg(f"Layout result: placed={len(layout)}, failed={failed}")
+        return layout, failed
+
+    layout, failed = _shelf_fit_layout(parcel_indices, truck_name)
+    dbg(f"Layout result: placed={len(layout)}, failed={failed}")
+    return layout, failed
+
 def fit_layout_for_truck_list(assignment):
     failed = []
     layout_dict = {v: [] for v in set(assignment.values())}
@@ -180,7 +336,38 @@ def fit_layout_for_truck_list(assignment):
         failed.extend(fail)
     return layout_dict, failed
 
-# Visualisation
+# =========================
+# Layout validator (overlaps/bounds)
+# =========================
+def validate_layout(layout_data, vehicles, tol=1e-9):
+    report = {}
+    for truck, rects in layout_data.items():
+        L = vehicles[truck]["max_length"]
+        W = vehicles[truck]["max_width"]
+
+        bounds_ok = True
+        overlaps = []
+
+        for i, x, y, l, w in rects:
+            if x < -tol or y < -tol or x + l > L + tol or y + w > W + tol:
+                bounds_ok = False
+
+        for a in range(len(rects)):
+            i1, x1, y1, l1, w1 = rects[a]
+            x1b, y1b = x1 + l1, y1 + w1
+            for b in range(a + 1, len(rects)):
+                i2, x2, y2, l2, w2 = rects[b]
+                x2b, y2b = x2 + l2, y2 + w2
+                sep = (x1b <= x2 + tol) or (x2b <= x1 + tol) or (y1b <= y2 + tol) or (y2b <= y1 + tol)
+                if not sep:
+                    overlaps.append((i1, i2))
+
+        report[truck] = {"bounds_ok": bounds_ok, "overlaps": overlaps}
+    return report
+
+# =========================
+# Improved visualisation (gutters + adaptive labels)
+# =========================
 def visualize_layout(layout_data):
     fig, axes = plt.subplots(len(layout_data), 1, figsize=(10, 5 * len(layout_data)))
     if len(layout_data) == 1:
@@ -202,17 +389,195 @@ def visualize_layout(layout_data):
 
         for p in parcels:
             i, x, y, l, w = p
-            rect = patches.Rectangle((x, y), l, w, linewidth=1.5, edgecolor='black', facecolor='skyblue')
+            # tiny visual gap so borders don't sit flush
+            g = 0.02
+            gx = min(g, max(l, 0) * 0.2)
+            gy = min(g, max(w, 0) * 0.2)
+            rect = patches.Rectangle(
+                (x + gx/2, y + gy/2),
+                max(l - gx, 0),
+                max(w - gy, 0),
+                linewidth=1.2,
+                edgecolor='black',
+                facecolor='skyblue',
+            )
             ax.add_patch(rect)
-            ax.text(x + l / 2, y + w / 2, f"{i + 1}", ha='center', va='center', fontsize=12, color='black')
+
+            # move/shrink labels for small boxes
+            min_side = min(l, w)
+            if min_side < 0.7:
+                ax.text(x + gx/2 + 0.02, y + gy/2 + 0.02, f"{i + 1}", ha='left', va='bottom', fontsize=7)
+            elif min_side < 1.1:
+                ax.text(x + l/2, y + w/2, f"{i + 1}", ha='center', va='center', fontsize=9)
+            else:
+                ax.text(x + l/2, y + w/2, f"{i + 1}", ha='center', va='center', fontsize=12)
 
     plt.tight_layout()
     st.pyplot(fig)
 
-# -------------------------
-# Stage B: New truck trial logic
-# -------------------------
+# =========================
+# Repack-from-scratch helper (prevents overlaps across iterations)
+# =========================
+def recompute_layout_for_all_assignments(all_assignment):
+    layout = {}
+    failed = []
+    used = sorted(set(all_assignment.values()), key=lambda t: vehicles[t]["cost"])
+    for v in used:
+        indices = [i for i, a in all_assignment.items() if a == v]
+        lay, fail = fit_layout_for_truck(indices, v)
+        layout[v] = lay          # replace, don't extend
+        failed.extend(fail)
+    return layout, failed
+
+# =========================
+# NEW: Tiny post-pass — remove smallest vehicles by moving to the most empty open truck
+# =========================
+def eliminate_small_trucks_postpass(all_assignment):
+    """
+    After the main loop, try to eliminate the tiniest/cheapest trucks by moving
+    all their parcels into ONE already-open recipient with the most empty space.
+    Accept a move only if weight/area caps hold AND a full 2-D repack of the
+    recipient succeeds. Never opens new trucks. Cost can only go down.
+    """
+    # Build current contents per truck
+    truck_to_items = {}
+    for i, t in all_assignment.items():
+        truck_to_items.setdefault(t, []).append(i)
+
+    # Helper: free caps based on totals (approximate, geometry still validated via repack)
+    def free_metrics(truck):
+        v = vehicles[truck]
+        used_w = sum(weights[i] for i in truck_to_items.get(truck, []))
+        used_a = sum(areas[i]   for i in truck_to_items.get(truck, []))
+        return (v["max_area"] - used_a, v["max_weight"] - used_w, v["max_area"])  # area-free, weight-free, deck size
+
+    # Donors: smallest deck first, then cheapest first
+    donors = [t for t, lst in truck_to_items.items() if lst]
+    donors.sort(key=lambda t: (vehicles[t]["max_area"], vehicles[t]["cost"]))
+
+    changed = False
+
+    for donor in donors:
+        items = list(truck_to_items.get(donor, []))
+        if not items:
+            continue
+
+        # Recipients: already-open trucks except donor, sorted by most free area
+        recipients = [r for r in truck_to_items.keys() if r != donor]
+        recipients.sort(key=lambda r: free_metrics(r), reverse=True)
+
+        v_donor = vehicles[donor]
+        dbg(f"\n🔁 Post-pass: try removing '{donor}' ({len(items)} items, cost £{v_donor['cost']})")
+
+        moved = False
+        for r in recipients:
+            v = vehicles[r]
+            cand = truck_to_items[r] + items
+
+            # quick totals check
+            tw = sum(weights[i] for i in cand)
+            ta = sum(areas[i]   for i in cand)
+            if tw > v["max_weight"] + 1e-9 or ta > v["max_area"] + 1e-9:
+                dbg(f"  • Skip recipient '{r}' — caps would overflow (Δw={tw-v['max_weight']:.2f}, Δa={ta-v['max_area']:.2f}).")
+                continue
+
+            # geometry validation: repack recipient with donor items added
+            lay, fail = fit_layout_for_truck(cand, r)
+            if not fail:
+                # commit: recipient takes new exact layout order; donor emptied
+                truck_to_items[r] = [i for (i,*_) in lay]
+                truck_to_items[donor] = []
+                dbg(f"  ✅ Removed '{donor}' by moving {len(items)} item(s) → '{r}'. Saved £{v_donor['cost']}.")
+                changed = True
+                moved = True
+                break
+            else:
+                dbg(f"  • '{r}' failed geometry when adding all {len(items)} item(s).")
+
+        if not moved:
+            dbg(f"  ↪ Could not remove '{donor}' — no single recipient could absorb ALL items.")
+
+    if not changed:
+        dbg("ℹ️ Post-pass: no small vehicle could be removed.")
+        # Recompute layout to ensure UI shows the final geometry
+        prev_layout, _ = recompute_layout_for_all_assignments(all_assignment)
+        return all_assignment, prev_layout, set(prev_layout.keys())
+
+    # Build new assignment and recompute layout for all trucks
+    new_assignment = {i: t for t, lst in truck_to_items.items() for i in lst}
+    new_layout, failed = recompute_layout_for_all_assignments(new_assignment)
+    if failed:
+        # Should be rare, but if global inconsistency appears, revert.
+        dbg(f"⚠️ Post-pass produced failures {failed}; reverting.")
+        prev_layout, _ = recompute_layout_for_all_assignments(all_assignment)
+        return all_assignment, prev_layout, set(prev_layout.keys())
+
+    return new_assignment, new_layout, set(new_layout.keys())
+
+# =========================
+# Try cheapest truck that can take ALL parcels (short-circuit)
+# =========================
+def try_single_truck_for_all(parcel_indices):
+    sorted_trucks = sorted(vehicles.keys(), key=lambda t: vehicles[t]["cost"])
+    all_idx = list(parcel_indices)
+    for truck_name in sorted_trucks:
+        if not all(truck_name in parcel_feasible_vehicles.get(i, []) for i in all_idx):
+            continue
+        caps = vehicles[truck_name]
+        tot_w = sum(weights[i] for i in all_idx)
+        tot_a = sum(areas[i]   for i in all_idx)
+        if tot_w > caps["max_weight"] or tot_a > caps["max_area"]:
+            continue
+        layout, failed = fit_layout_for_truck(all_idx, truck_name)
+        if not failed:
+            assignment = {i: truck_name for i in all_idx}
+            layout_dict = {truck_name: layout}
+            used = {truck_name}
+            dbg(f"✅ Global single-truck pick: '{truck_name}' fits ALL parcels.")
+            return assignment, layout_dict, used
+    return None
+
+# =========================
+# Seed with largest/most expensive truck if no single truck can take all
+# =========================
+def seed_with_largest_truck(parcel_indices):
+    seed_truck = max(vehicles.keys(), key=lambda t: (vehicles[t]["max_area"], vehicles[t]["cost"]))
+    feasible = [i for i in parcel_indices if seed_truck in parcel_feasible_vehicles.get(i, [])]
+    if not feasible:
+        dbg(f"⚠️ Largest truck '{seed_truck}' is not feasible for any parcel; skipping seed.")
+        return {}, {}, set(), list(parcel_indices)
+
+    caps = vehicles[seed_truck]
+    dbg(f"🔎 Seeding with largest truck '{seed_truck}' (area={caps['max_area']}, cost={caps['cost']})")
+
+    layout, failed = fit_layout_for_truck(feasible, seed_truck)
+    placed = [i for (i, *_rest) in layout]
+
+    def total_weight_of(indices): return sum(weights[i] for i in indices)
+    placed_set = set(placed)
+    while total_weight_of(list(placed_set)) > caps["max_weight"] and placed_set:
+        rem = max(placed_set, key=lambda i: weights[i])
+        placed_set.remove(rem)
+        layout, _fail = fit_layout_for_truck(list(placed_set), seed_truck)
+        placed_set = {i for (i, *_r) in layout}
+
+    placed = list(placed_set)
+    assignment = {i: seed_truck for i in placed}
+    layout_dict = {seed_truck: layout} if placed else {}
+    used = {seed_truck} if placed else set()
+    leftovers = [i for i in parcel_indices if i not in placed]
+
+    if placed:
+        dbg(f"✅ Seeded '{seed_truck}' with {len(placed)} parcel(s); {len(leftovers)} leftover.")
+    else:
+        dbg(f"ℹ️ Seeding placed none on '{seed_truck}'.")
+    return assignment, layout_dict, used, leftovers
+
+# =========================
+# Stage B: Trial logic (pre-MIP geometry first, then optimiser)
+# =========================
 if st.button("Run Optimization"):
+    debug_log.clear()
     if not valid_parcels:
         st.error("No valid parcels to optimize. All parcels exceed truck dimensions.")
     else:
@@ -221,70 +586,167 @@ if st.button("Run Optimization"):
         used_trucks = set()
         all_layout = {}
 
+        # 1) Global single-truck attempt
+        single = try_single_truck_for_all(unassigned)
+        if single is not None:
+            all_assignment, all_layout, used_trucks = single
+            unassigned = []  # everything placed
+
+        # 2) Seed with the largest/most expensive truck
+        if unassigned:
+            seed_assign, seed_layout, seed_used, leftovers = seed_with_largest_truck(unassigned)
+            all_assignment.update(seed_assign)
+            if seed_layout:
+                all_layout.update(seed_layout)
+            used_trucks.update(seed_used)
+            unassigned = leftovers
+
         progress_text = st.empty()
         progress_bar = st.progress(0)
 
         attempt = 1
         max_attempts = 100
+        no_progress_count = 0
+        last_unassigned_count = len(unassigned)
 
         while unassigned and attempt <= max_attempts:
             progress_text.text(f"Optimization attempt: {attempt}")
-            progress_bar.progress(attempt / max_attempts)
+            progress_bar.progress(min(1.0, attempt / max_attempts))
 
-            # Sort all trucks by cost
             sorted_trucks = sorted(vehicles.keys(), key=lambda t: vehicles[t]["cost"])
-
             placed_this_round = False
 
-            # Try each truck in ascending cost order
+            # 3) Single-truck shortcut (subset) tries ALL trucks (pre-MIP geometry)
+            any_tried = False
             for truck_name in sorted_trucks:
-                # Only consider if all parcels fit dimensionally in this truck
-                layout, failed = fit_layout_for_truck(unassigned, truck_name)
-                if not failed:
-                    # All parcels fit in this truck
-                    for i in unassigned:
-                        all_assignment[i] = truck_name
-                    if truck_name not in all_layout:
-                        all_layout[truck_name] = []
-                    all_layout[truck_name].extend(layout)
-                    used_trucks.add(truck_name)
-                    unassigned = []
+                if not all(truck_name in parcel_feasible_vehicles.get(i, []) for i in unassigned):
+                    continue
+                caps = vehicles[truck_name]
+                total_weight_batch = sum(weights[i] for i in unassigned)
+                total_area_batch   = sum(areas[i]   for i in unassigned)
+                if total_weight_batch > caps["max_weight"] or total_area_batch > caps["max_area"]:
+                    continue
+
+                any_tried = True
+                dbg(f"\n--- Trying single-truck shortcut with '{truck_name}' for parcels {unassigned} ---")
+
+                for i in unassigned:
+                    all_assignment[i] = truck_name
+
+                all_layout, failed = recompute_layout_for_all_assignments(all_assignment)
+
+                for i in failed:
+                    if i in all_assignment:
+                        del all_assignment[i]
+
+                used_trucks = set(all_layout.keys())
+                unassigned = failed
+
+                if len(unassigned) == 0:
+                    dbg(f"✅ Accept '{truck_name}' — geometry fits and caps satisfied for all.")
                     placed_this_round = True
-                    break  # stop trying trucks
+                    break
+                else:
+                    dbg(f"ℹ️ '{truck_name}' took a subset; {len(unassigned)} unplaced remain → will try next truck.")
 
             if not placed_this_round:
-                # No single truck could take all parcels — pick the most expensive and run optimiser loop
-                most_expensive_truck = max(sorted_trucks, key=lambda t: vehicles[t]["cost"])  # (kept if you plan to use it)
-                # Run optimiser on unassigned as before
+                if not any_tried:
+                    dbg("\nNo single truck could take the whole batch. Falling back to optimiser.")
+                else:
+                    dbg("\nTried all trucks with shortcut; still have leftovers. Falling back to optimiser.")
+
+                prev_unassigned = set(unassigned)
+
+                # 4) MIP on leftovers
                 assignment, used, _ = run_optimizer(unassigned)
-                layout, failed = fit_layout_for_truck_list(assignment)  # ✅ now defined above
 
-                for i in assignment:
-                    if i not in failed:
-                        all_assignment[i] = assignment[i]
+                # merge
+                for i, v in assignment.items():
+                    all_assignment[i] = v
 
-                for v, layout_list in layout.items():
-                    if v not in all_layout:
-                        all_layout[v] = []
-                    all_layout[v].extend(layout_list)
+                counts = Counter(all_assignment.values())
+                dbg("Repacking trucks (current counts): " + ", ".join(f"{t}:{counts[t]}" for t in sorted(counts)))
 
-                unassigned = failed
-                used_trucks.update(used)
+                # validate via geometry
+                all_layout, failed = recompute_layout_for_all_assignments(all_assignment)
+
+                # drop failed items back to leftovers
+                failed_set = set(failed)
+                for i in failed_set:
+                    if i in all_assignment:
+                        del all_assignment[i]
+
+                used_trucks = set(all_layout.keys())
+
+                assigned_now = set(assignment.keys())
+                packed_ok = assigned_now - failed_set
+                new_unassigned = list(prev_unassigned - packed_ok)
+
+                if len(new_unassigned) >= last_unassigned_count:
+                    no_progress_count += 1
+                else:
+                    no_progress_count = 0
+                    last_unassigned_count = len(new_unassigned)
+
+                unassigned = new_unassigned
+
+                if no_progress_count >= NO_PROGRESS_MAX:
+                    st.error(f"Stopped after {NO_PROGRESS_MAX} no-progress rounds. Could not place {len(unassigned)} parcel(s): {sorted(unassigned)}")
+                    break
 
             attempt += 1
 
         progress_bar.progress(1.0)
         progress_text.text("Optimization complete.")
 
-        if unassigned:
-            st.error("Some parcels could not be placed after retries.")
+        # ==========================
+        # NEW: Post-pass — remove smallest vehicles if a single recipient can absorb them
+        # ==========================
+        if all_assignment:
+            all_assignment, all_layout, used_trucks = eliminate_small_trucks_postpass(all_assignment)
+
+        # ==========================
+        # Results (count-based success)
+        # ==========================
+        placed_count = len(all_assignment)
+        total_valid = len(valid_parcels)
+
+        if placed_count == total_valid:
+            st.success(f"All parcels placed successfully. ({placed_count}/{total_valid})")
         else:
-            st.success("All parcels placed successfully.")
+            st.warning(f"{total_valid - placed_count} parcel(s) could not be placed. ({placed_count}/{total_valid})")
 
         if all_assignment:
-            total_cost = sum(vehicles[v]["cost"] for v in used_trucks)
             truck_summary = pd.Series(list(all_assignment.values())).value_counts().reset_index()
             truck_summary.columns = ["Truck", "Number of Parcels"]
-            st.markdown(f"### 💰 Total Cost of Optimized Truck Selection: £{total_cost:.2f}")
             st.dataframe(truck_summary)
+
+            grouped = {}
+            for i, t in all_assignment.items():
+                grouped.setdefault(t, []).append(i + 1)
+            st.markdown("#### Parcels per truck")
+            for t in sorted(grouped.keys(), key=lambda k: vehicles[k]["cost"]):
+                ids = sorted(grouped[t])
+                st.markdown(f"**{t}**  — {len(ids)} parcels")
+                st.code(", ".join(map(str, ids)))
+
+            report = validate_layout(all_layout, vehicles)
+            bad = {tt: rr for tt, rr in report.items() if (not rr["bounds_ok"] or rr["overlaps"])}
+            if bad:
+                st.error("Geometry check found issues (true overlaps or out-of-bounds):")
+                for tt, rr in bad.items():
+                    st.write(f"**{tt}** → bounds_ok={rr['bounds_ok']}, overlaps={[(a+1,b+1) for a,b in rr['overlaps']]}")
+            else:
+                st.success("Geometry check: ✅ no overlaps and all parcels inside deck bounds.")
+
             visualize_layout(all_layout)
+
+# =========================
+# Debug panel
+# =========================
+if show_debug:
+    st.markdown("### 🐞 Debug Log")
+    debug_text = "\n".join(debug_log)
+    if len(debug_text) > 12000:
+        debug_text = "...(truncated)…\n" + debug_text[-12000:]
+    st.text_area("Internal debug output (also printed to server console)", value=debug_text, height=320)
